@@ -14,6 +14,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus/push"
 )
 
+// 全局声明 Gauge
+var (
+	oulaTotalGauge      prometheus.Gauge
+	zkworkGpuGauge      prometheus.Gauge
+	cysicProofRateGauge prometheus.Gauge
+)
+
 func main() {
 	// 定义命令行参数
 	oulaLogPath := flag.String("oula-log", "oula.log", "Path to the oula log file")
@@ -25,6 +32,9 @@ func main() {
 
 	flag.Parse()
 
+	// 初始化 Gauge
+	initMetrics(*instanceName)
+
 	// 启动日志监控
 	go monitorOulaLog(*oulaLogPath, *pushgatewayURL, *jobName, *instanceName)
 	go monitorZkworkLog(*zkworkLogPath, *pushgatewayURL, *jobName, *instanceName)
@@ -32,6 +42,26 @@ func main() {
 
 	// 保持程序运行
 	select {}
+}
+
+func initMetrics(instanceName string) {
+	oulaTotalGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:        "oula_total",
+		Help:        "Total value from oula log",
+		ConstLabels: prometheus.Labels{"instance": instanceName},
+	})
+
+	zkworkGpuGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:        "zkwork_gpu",
+		Help:        "GPU value from zkwork log",
+		ConstLabels: prometheus.Labels{"instance": instanceName},
+	})
+
+	cysicProofRateGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:        "cysic_proof_rate",
+		Help:        "1min-proof-rate from cysic log",
+		ConstLabels: prometheus.Labels{"instance": instanceName},
+	})
 }
 
 func monitorOulaLog(logPath, pushgatewayURL, jobName, instanceName string) {
@@ -52,7 +82,8 @@ func monitorOulaLog(logPath, pushgatewayURL, jobName, instanceName string) {
 			if len(columns) >= 4 {
 				value, err := strconv.Atoi(columns[3])
 				if err == nil {
-					pushMetric("oula_total", float64(value), pushgatewayURL, jobName, instanceName)
+					oulaTotalGauge.Set(float64(value))
+					pushMetric(pushgatewayURL, jobName)
 				}
 			}
 		}
@@ -81,7 +112,8 @@ func monitorZkworkLog(logPath, pushgatewayURL, jobName, instanceName string) {
 		if len(matches) > 1 {
 			value, err := strconv.Atoi(matches[1])
 			if err == nil {
-				pushMetric("zkwork_gpu", float64(value), pushgatewayURL, jobName, instanceName)
+				zkworkGpuGauge.Set(float64(value))
+				pushMetric(pushgatewayURL, jobName)
 			}
 		}
 	}
@@ -109,7 +141,8 @@ func monitorCysicLog(logPath, pushgatewayURL, jobName, instanceName string) {
 		if len(matches) > 1 {
 			value, err := strconv.Atoi(matches[1])
 			if err == nil {
-				pushMetric("cysic_proof_rate", float64(value), pushgatewayURL, jobName, instanceName)
+				cysicProofRateGauge.Set(float64(value))
+				pushMetric(pushgatewayURL, jobName)
 			}
 		}
 	}
@@ -119,20 +152,11 @@ func monitorCysicLog(logPath, pushgatewayURL, jobName, instanceName string) {
 	}
 }
 
-func pushMetric(metricName string, value float64, pushgatewayURL, jobName, instanceName string) {
+func pushMetric(pushgatewayURL, jobName string) {
 	pusher := push.New(pushgatewayURL, jobName).
-		Collector(prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: metricName,
-			ConstLabels: prometheus.Labels{
-				"instance": instanceName,
-			},
-		}))
-
-	gauge := prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: metricName,
-	})
-	gauge.Set(value)
-	pusher.Collector(gauge)
+		Collector(oulaTotalGauge).
+		Collector(zkworkGpuGauge).
+		Collector(cysicProofRateGauge)
 
 	if err := pusher.Push(); err != nil {
 		fmt.Printf("Could not push to Pushgateway: %v\n", err)
