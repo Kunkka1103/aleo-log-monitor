@@ -17,15 +17,17 @@ import (
 // 全局声明 Gauge
 var (
 	oulaTotalGauge      prometheus.Gauge
+	oulaTotalNewGauge   prometheus.Gauge
 	zkworkGpuGauge      prometheus.Gauge
 	cysicProofRateGauge prometheus.Gauge
 )
 
 func main() {
 	// 定义命令行参数
-	oulaLogPath := flag.String("oula-log", "oula.log", "Path to the oula log file")
-	zkworkLogPath := flag.String("zkwork-log", "zkwork.log", "Path to the zkwork log file")
-	cysicLogPath := flag.String("cysic-log", "cysic.log", "Path to the cysic log file")
+	oulaLogPath := flag.String("oula-log", "", "Path to the oula log file")
+	oulaNewLogPath := flag.String("oula-new-log", "", "Path to the new version oula log file")
+	zkworkLogPath := flag.String("zkwork-log", "", "Path to the zkwork log file")
+	cysicLogPath := flag.String("cysic-log", "", "Path to the cysic log file")
 	pushgatewayURL := flag.String("pushgateway-url", "http://localhost:9091", "Pushgateway URL")
 	jobName := flag.String("job-name", "log_monitor", "Job name for Pushgateway")
 	instanceName := flag.String("instance-name", "instance1", "Instance name for Pushgateway")
@@ -36,9 +38,21 @@ func main() {
 	initMetrics(*instanceName)
 
 	// 启动日志监控
-	go monitorOulaLog(*oulaLogPath, *pushgatewayURL, *jobName, *instanceName)
-	go monitorZkworkLog(*zkworkLogPath, *pushgatewayURL, *jobName, *instanceName)
-	go monitorCysicLog(*cysicLogPath, *pushgatewayURL, *jobName, *instanceName)
+	if *oulaLogPath != "" {
+		go monitorOulaLog(*oulaLogPath, *pushgatewayURL, *jobName, *instanceName, "v1", oulaTotalGauge)
+	}
+
+	if *oulaNewLogPath != "" {
+		go monitorOulaLog(*oulaNewLogPath, *pushgatewayURL, *jobName, *instanceName, "v2", oulaTotalNewGauge)
+	}
+
+	if *zkworkLogPath != "" {
+		go monitorZkworkLog(*zkworkLogPath, *pushgatewayURL, *jobName, *instanceName)
+	}
+
+	if *cysicLogPath != "" {
+		go monitorCysicLog(*cysicLogPath, *pushgatewayURL, *jobName, *instanceName)
+	}
 
 	// 保持程序运行
 	select {}
@@ -48,7 +62,13 @@ func initMetrics(instanceName string) {
 	oulaTotalGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name:        "oula_total",
 		Help:        "Total value from oula log",
-		ConstLabels: prometheus.Labels{"instance": instanceName},
+		ConstLabels: prometheus.Labels{"instance": instanceName, "version": "v1"},
+	})
+
+	oulaTotalNewGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name:        "oula_total",
+		Help:        "Total value from new version oula log",
+		ConstLabels: prometheus.Labels{"instance": instanceName, "version": "v2"},
 	})
 
 	zkworkGpuGauge = prometheus.NewGauge(prometheus.GaugeOpts{
@@ -64,7 +84,7 @@ func initMetrics(instanceName string) {
 	})
 }
 
-func monitorOulaLog(logPath, pushgatewayURL, jobName, instanceName string) {
+func monitorOulaLog(logPath, pushgatewayURL, jobName, instanceName, version string, gauge prometheus.Gauge) {
 	cmd := exec.Command("tail", "-f", logPath)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -82,8 +102,8 @@ func monitorOulaLog(logPath, pushgatewayURL, jobName, instanceName string) {
 			if len(columns) >= 4 {
 				value, err := strconv.Atoi(columns[3])
 				if err == nil {
-					oulaTotalGauge.Set(float64(value))
-					pushMetric(pushgatewayURL, jobName)
+					gauge.Set(float64(value))
+					pushMetricWithVersion(pushgatewayURL, jobName, version, gauge)
 				}
 			}
 		}
@@ -152,9 +172,17 @@ func monitorCysicLog(logPath, pushgatewayURL, jobName, instanceName string) {
 	}
 }
 
+func pushMetricWithVersion(pushgatewayURL, jobName, version string, gauge prometheus.Gauge) {
+	pusher := push.New(pushgatewayURL, jobName).
+		Collector(gauge)
+
+	if err := pusher.Push(); err != nil {
+		fmt.Printf("Could not push to Pushgateway: %v\n", err)
+	}
+}
+
 func pushMetric(pushgatewayURL, jobName string) {
 	pusher := push.New(pushgatewayURL, jobName).
-		Collector(oulaTotalGauge).
 		Collector(zkworkGpuGauge).
 		Collector(cysicProofRateGauge)
 
