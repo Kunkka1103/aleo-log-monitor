@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"flag"
-	"fmt"
 	"log"
 	"os/exec"
 	"regexp"
@@ -14,14 +13,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/push"
 )
 
-// 全局声明 Gauge
-var (
-	oulaTotalGauge      prometheus.Gauge
-	oulaTotalNewGauge   prometheus.Gauge
-	zkworkGpuGauge      prometheus.Gauge
-	cysicProofRateGauge prometheus.Gauge
-)
-
 func main() {
 	// 定义命令行参数
 	oulaLogPath := flag.String("oula-log", "", "Path to the oula log file")
@@ -29,71 +20,54 @@ func main() {
 	zkworkLogPath := flag.String("zkwork-log", "", "Path to the zkwork log file")
 	cysicLogPath := flag.String("cysic-log", "", "Path to the cysic log file")
 	pushgatewayURL := flag.String("pushgateway-url", "http://localhost:9091", "Pushgateway URL")
-	jobName := flag.String("job-name", "log_monitor", "Job name for Pushgateway")
-	instanceName := flag.String("instance-name", "instance1", "Instance name for Pushgateway")
+	instance := flag.String("instance", "", "Instance name")
 
 	flag.Parse()
 
-	// 初始化 Gauge
-	initMetrics(*instanceName)
-
 	// 启动日志监控
 	if *oulaLogPath != "" {
-		go monitorOulaLog(*oulaLogPath, *pushgatewayURL, *jobName, *instanceName, "v1", oulaTotalGauge)
+		log.Printf("Starting monitoring for Oula log: %s", *oulaLogPath)
+		go monitorOulaLog(*oulaLogPath, "oula_total_v1", *instance, *pushgatewayURL)
+	} else {
+		log.Println("Oula log path not provided, skipping...")
 	}
 
 	if *oulaNewLogPath != "" {
-		go monitorOulaLog(*oulaNewLogPath, *pushgatewayURL, *jobName, *instanceName, "v2", oulaTotalNewGauge)
+		log.Printf("Starting monitoring for new version Oula log: %s", *oulaNewLogPath)
+		go monitorOulaLog(*oulaNewLogPath, "oula_total_v2", *instance, *pushgatewayURL)
+	} else {
+		log.Println("New version Oula log path not provided, skipping...")
 	}
 
 	if *zkworkLogPath != "" {
-		go monitorZkworkLog(*zkworkLogPath, *pushgatewayURL, *jobName, *instanceName)
+		log.Printf("Starting monitoring for Zkwork log: %s", *zkworkLogPath)
+		go monitorZkworkLog(*zkworkLogPath, "zkwork_gpu", *instance, *pushgatewayURL)
+	} else {
+		log.Println("Zkwork log path not provided, skipping...")
 	}
 
 	if *cysicLogPath != "" {
-		go monitorCysicLog(*cysicLogPath, *pushgatewayURL, *jobName, *instanceName)
+		log.Printf("Starting monitoring for Cysic log: %s", *cysicLogPath)
+		go monitorCysicLog(*cysicLogPath, "cysic_proof_rate", *instance, *pushgatewayURL)
+	} else {
+		log.Println("Cysic log path not provided, skipping...")
 	}
 
 	// 保持程序运行
 	select {}
 }
 
-func initMetrics(instanceName string) {
-	oulaTotalGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name:        "oula_total",
-		Help:        "Total value from oula log",
-		ConstLabels: prometheus.Labels{"instance": instanceName, "version": "v1"},
-	})
-
-	oulaTotalNewGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name:        "oula_total",
-		Help:        "Total value from new version oula log",
-		ConstLabels: prometheus.Labels{"instance": instanceName, "version": "v2"},
-	})
-
-	zkworkGpuGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name:        "zkwork_gpu",
-		Help:        "GPU value from zkwork log",
-		ConstLabels: prometheus.Labels{"instance": instanceName},
-	})
-
-	cysicProofRateGauge = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name:        "cysic_proof_rate",
-		Help:        "1min-proof-rate from cysic log",
-		ConstLabels: prometheus.Labels{"instance": instanceName},
-	})
-}
-
-func monitorOulaLog(logPath, pushgatewayURL, jobName, instanceName, version string, gauge prometheus.Gauge) {
+func monitorOulaLog(logPath string, jobName string, instance string, url string) {
 	cmd := exec.Command("tail", "-f", logPath)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to start tail command for %s: %v", logPath, err)
 	}
 	if err := cmd.Start(); err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to start monitoring for %s: %v", logPath, err)
 	}
 
+	log.Printf("Monitoring Oula log: %s", logPath)
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -102,28 +76,33 @@ func monitorOulaLog(logPath, pushgatewayURL, jobName, instanceName, version stri
 			if len(columns) >= 4 {
 				value, err := strconv.Atoi(columns[3])
 				if err == nil {
-					gauge.Set(float64(value))
-					pushMetricWithVersion(pushgatewayURL, jobName, version, gauge)
+					log.Printf("Extracted value from Oula log (%s): %d", logPath, value)
+					Push(jobName, instance, float64(value), url)
+				} else {
+					log.Printf("Failed to convert value from Oula log (%s): %v", logPath, err)
 				}
+			} else {
+				log.Printf("Unexpected log format in Oula log (%s): %s", logPath, line)
 			}
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error reading Oula log (%s): %v", logPath, err)
 	}
 }
 
-func monitorZkworkLog(logPath, pushgatewayURL, jobName, instanceName string) {
+func monitorZkworkLog(logPath string, jobName string, instance string, url string) {
 	cmd := exec.Command("tail", "-f", logPath)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to start tail command for %s: %v", logPath, err)
 	}
 	if err := cmd.Start(); err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to start monitoring for %s: %v", logPath, err)
 	}
 
+	log.Printf("Monitoring Zkwork log: %s", logPath)
 	re := regexp.MustCompile(`gpu\[\*\]: \(1m - (\d+)`)
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
@@ -132,27 +111,32 @@ func monitorZkworkLog(logPath, pushgatewayURL, jobName, instanceName string) {
 		if len(matches) > 1 {
 			value, err := strconv.Atoi(matches[1])
 			if err == nil {
-				zkworkGpuGauge.Set(float64(value))
-				pushMetric(pushgatewayURL, jobName)
+				log.Printf("Extracted GPU value from Zkwork log (%s): %d", logPath, value)
+				Push(jobName, instance, float64(value), url)
+			} else {
+				log.Printf("Failed to convert GPU value from Zkwork log (%s): %v", logPath, err)
 			}
+		} else {
+			log.Printf("Unexpected log format in Zkwork log (%s): %s", logPath, line)
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error reading Zkwork log (%s): %v", logPath, err)
 	}
 }
 
-func monitorCysicLog(logPath, pushgatewayURL, jobName, instanceName string) {
+func monitorCysicLog(logPath string, jobName string, instance string, url string) {
 	cmd := exec.Command("tail", "-f", logPath)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to start tail command for %s: %v", logPath, err)
 	}
 	if err := cmd.Start(); err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to start monitoring for %s: %v", logPath, err)
 	}
 
+	log.Printf("Monitoring Cysic log: %s", logPath)
 	re := regexp.MustCompile(`1min-proof-rate: (\d+)`)
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
@@ -161,32 +145,31 @@ func monitorCysicLog(logPath, pushgatewayURL, jobName, instanceName string) {
 		if len(matches) > 1 {
 			value, err := strconv.Atoi(matches[1])
 			if err == nil {
-				cysicProofRateGauge.Set(float64(value))
-				pushMetric(pushgatewayURL, jobName)
+				log.Printf("Extracted 1min-proof-rate from Cysic log (%s): %d", logPath, value)
+				Push(jobName, instance, float64(value), url)
+			} else {
+				log.Printf("Failed to convert 1min-proof-rate from Cysic log (%s): %v", logPath, err)
 			}
+		} else {
+			log.Printf("Unexpected log format in Cysic log (%s): %s", logPath, line)
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
+		log.Fatalf("Error reading Cysic log (%s): %v", logPath, err)
 	}
 }
 
-func pushMetricWithVersion(pushgatewayURL, jobName, version string, gauge prometheus.Gauge) {
-	pusher := push.New(pushgatewayURL, jobName).
-		Collector(gauge)
-
-	if err := pusher.Push(); err != nil {
-		fmt.Printf("Could not push to Pushgateway: %v\n", err)
-	}
-}
-
-func pushMetric(pushgatewayURL, jobName string) {
-	pusher := push.New(pushgatewayURL, jobName).
-		Collector(zkworkGpuGauge).
-		Collector(cysicProofRateGauge)
-
-	if err := pusher.Push(); err != nil {
-		fmt.Printf("Could not push to Pushgateway: %v\n", err)
+func Push(jobName string, instance string, value float64, url string) {
+	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: jobName})
+	gauge.Set(value)
+	err := push.New(url, jobName).
+		Grouping("instance", instance).
+		Collector(gauge).
+		Push()
+	if err != nil {
+		log.Printf("Push to Prometheus %s failed: %s", url, err)
+	} else {
+		log.Printf("Successfully pushed metric to %s: %s=%f", url, jobName, value)
 	}
 }
