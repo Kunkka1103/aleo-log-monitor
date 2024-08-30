@@ -19,6 +19,7 @@ func main() {
 	oulaNewLogPath := flag.String("oula-new-log", "", "Path to the new version oula log file")
 	zkworkLogPath := flag.String("zkwork-log", "", "Path to the zkwork log file")
 	cysicLogPath := flag.String("cysic-log", "", "Path to the cysic log file")
+	koiLogPath := flag.String("koi-log", "", "Path to the koi log file")
 	pushgatewayURL := flag.String("pushgateway-url", "http://localhost:9091", "Pushgateway URL")
 	instance := flag.String("instance", "", "Instance name")
 
@@ -51,6 +52,13 @@ func main() {
 		go monitorCysicLog(*cysicLogPath, "cysic_proof_rate", *instance, *pushgatewayURL)
 	} else {
 		log.Println("Cysic log path not provided, skipping...")
+	}
+
+	if *koiLogPath != "" {
+		log.Printf("Starting monitoring for Koi log: %s", *koiLogPath)
+		go monitorKoiLog(*koiLogPath, "koi_instant_rate", *instance, *pushgatewayURL)
+	} else {
+		log.Println("Koi log path not provided, skipping...")
 	}
 
 	// 保持程序运行
@@ -157,6 +165,40 @@ func monitorCysicLog(logPath string, jobName string, instance string, url string
 
 	if err := scanner.Err(); err != nil {
 		log.Fatalf("Error reading Cysic log (%s): %v", logPath, err)
+	}
+}
+
+func monitorKoiLog(logPath string, jobName string, instance string, url string) {
+	cmd := exec.Command("tail", "-f", logPath)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Fatalf("Failed to start tail command for %s: %v", logPath, err)
+	}
+	if err := cmd.Start(); err != nil {
+		log.Fatalf("Failed to start monitoring for %s: %v", logPath, err)
+	}
+
+	log.Printf("Monitoring Koi log: %s", logPath)
+	re := regexp.MustCompile(`instant rate: ([\d\.]+)`)
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		matches := re.FindStringSubmatch(line)
+		if len(matches) > 1 {
+			value, err := strconv.ParseFloat(matches[1], 64)
+			if err == nil {
+				log.Printf("Extracted instant rate from Koi log (%s): %f", logPath, value)
+				Push(jobName, instance, value, url)
+			} else {
+				log.Printf("Failed to convert instant rate from Koi log (%s): %v", logPath, err)
+			}
+		} else {
+			log.Printf("Unexpected log format in Koi log (%s): %s", logPath, line)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Fatalf("Error reading Koi log (%s): %v", logPath, err)
 	}
 }
 
