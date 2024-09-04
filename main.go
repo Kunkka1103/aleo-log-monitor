@@ -18,6 +18,7 @@ func main() {
 	oulaLogPath := flag.String("oula-log", "", "Path to the oula log file")
 	oulaNewLogPath := flag.String("oula-new-log", "", "Path to the new version oula log file")
 	zkworkLogPath := flag.String("zkwork-log", "", "Path to the zkwork log file")
+	zkworkNewLogPath := flag.String("zkwork-new-log", "", "Path to the new version zkwork log file") // 新版本 Zkwork 日志路径
 	cysicLogPath := flag.String("cysic-log", "", "Path to the cysic log file")
 	koiLogPath := flag.String("koi-log", "", "Path to the koi log file")
 	zkpoolLogPath := flag.String("zkpool-log", "", "Path to the zkpool log file")
@@ -48,6 +49,13 @@ func main() {
 		log.Println("Zkwork log path not provided, skipping...")
 	}
 
+	if *zkworkNewLogPath != "" {
+		log.Printf("Starting monitoring for new version Zkwork log: %s", *zkworkNewLogPath)
+		go monitorZkworkLog(*zkworkNewLogPath, "zkwork_gpu_903", *instance, *pushgatewayURL) // 新版本 Zkwork 的 metrics 加 `_903` 后缀
+	} else {
+		log.Println("New version Zkwork log path not provided, skipping...")
+	}
+
 	if *cysicLogPath != "" {
 		log.Printf("Starting monitoring for Cysic log: %s", *cysicLogPath)
 		go monitorCysicLog(*cysicLogPath, "cysic_proof_rate", *instance, *pushgatewayURL)
@@ -64,7 +72,7 @@ func main() {
 
 	if *zkpoolLogPath != "" {
 		log.Printf("Starting monitoring for Zkpool log: %s", *zkpoolLogPath)
-		go monitorZkpoolLog(*zkpoolLogPath, "f2pool_proof_rate", *instance, *pushgatewayURL)
+		go monitorZkpoolLog(*zkpoolLogPath, "zkpool_proof_rate", *instance, *pushgatewayURL)
 	} else {
 		log.Println("Zkpool log path not provided, skipping...")
 	}
