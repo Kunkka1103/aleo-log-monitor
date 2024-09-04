@@ -20,6 +20,7 @@ func main() {
 	zkworkLogPath := flag.String("zkwork-log", "", "Path to the zkwork log file")
 	cysicLogPath := flag.String("cysic-log", "", "Path to the cysic log file")
 	koiLogPath := flag.String("koi-log", "", "Path to the koi log file")
+	zkpoolLogPath := flag.String("zkpool-log", "", "Path to the zkpool log file")
 	pushgatewayURL := flag.String("pushgateway-url", "http://localhost:9091", "Pushgateway URL")
 	instance := flag.String("instance", "", "Instance name")
 
@@ -61,6 +62,13 @@ func main() {
 		log.Println("Koi log path not provided, skipping...")
 	}
 
+	if *zkpoolLogPath != "" {
+		log.Printf("Starting monitoring for Zkpool log: %s", *zkpoolLogPath)
+		go monitorZkpoolLog(*zkpoolLogPath, "f2pool_proof_rate", *instance, *pushgatewayURL)
+	} else {
+		log.Println("Zkpool log path not provided, skipping...")
+	}
+
 	// 保持程序运行
 	select {}
 }
@@ -79,19 +87,17 @@ func monitorOulaLog(logPath string, jobName string, instance string, url string)
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.Contains(strings.ToLower(line), "total") {
-			columns := strings.Fields(line)
-			if len(columns) >= 4 {
-				value, err := strconv.Atoi(columns[3])
-				if err == nil {
-					log.Printf("Extracted value from Oula log (%s): %d", logPath, value)
-					Push(jobName, instance, float64(value), url)
-				} else {
-					log.Printf("Failed to convert value from Oula log (%s): %v", logPath, err)
-				}
+		columns := strings.Fields(line)
+		if len(columns) >= 4 && strings.Contains(strings.ToLower(columns[0]), "total") {
+			value, err := strconv.Atoi(columns[3])
+			if err == nil {
+				log.Printf("Extracted value from Oula log (%s): %d", logPath, value)
+				Push(jobName, instance, float64(value), url)
 			} else {
-				log.Printf("Unexpected log format in Oula log (%s): %s", logPath, line)
+				log.Printf("Failed to convert value from Oula log (%s): %v", logPath, err)
 			}
+		} else {
+			log.Printf("Unexpected log format in Oula log (%s): %s", logPath, line)
 		}
 	}
 
@@ -199,6 +205,40 @@ func monitorKoiLog(logPath string, jobName string, instance string, url string) 
 
 	if err := scanner.Err(); err != nil {
 		log.Fatalf("Error reading Koi log (%s): %v", logPath, err)
+	}
+}
+
+func monitorZkpoolLog(logPath string, jobName string, instance string, url string) {
+	cmd := exec.Command("tail", "-f", logPath)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Fatalf("Failed to start tail command for %s: %v", logPath, err)
+	}
+	if err := cmd.Start(); err != nil {
+		log.Fatalf("Failed to start monitoring for %s: %v", logPath, err)
+	}
+
+	log.Printf("Monitoring Zkpool log: %s", logPath)
+	re := regexp.MustCompile(`proof rate (\d+)/s`)
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		matches := re.FindStringSubmatch(line)
+		if len(matches) > 1 {
+			value, err := strconv.Atoi(matches[1])
+			if err == nil {
+				log.Printf("Extracted proof rate from Zkpool log (%s): %d", logPath, value)
+				Push(jobName, instance, float64(value), url)
+			} else {
+				log.Printf("Failed to convert proof rate from Zkpool log (%s): %v", logPath, err)
+			}
+		} else {
+			log.Printf("Unexpected log format in Zkpool log (%s): %s", logPath, line)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Fatalf("Error reading Zkpool log (%s): %v", logPath, err)
 	}
 }
 
